@@ -17,7 +17,11 @@
 # if received directly from Google. Use is subject to terms of use available at
 # https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_TERMS_OF_USE.md
 
-FROM nvidia/cuda:12.6.3-base-ubuntu24.04
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/nvidia/cuda:12.6.3-base-ubuntu24.04
+
+# Switch apt sources to Aliyun mirror for faster downloads in China.
+RUN sed -i 's|http://archive.ubuntu.com|https://mirrors.aliyun.com|g' /etc/apt/sources.list.d/ubuntu.sources \
+    && sed -i 's|http://security.ubuntu.com|https://mirrors.aliyun.com|g' /etc/apt/sources.list.d/ubuntu.sources
 
 # Some RUN statements are combined together to make Docker build run faster.
 # Get latest package listing, install python, git, wget, compilers and libs.
@@ -26,12 +30,11 @@ FROM nvidia/cuda:12.6.3-base-ubuntu24.04
 # * zlib is a required dependency of AlphaFold 3.
 RUN DEBIAN_FRONTEND=noninteractive \
 apt-get update --quiet \
-&& apt-get install --yes --quiet python3.12 python3.12-dev \
+&& apt-get install --yes --quiet python3.12 python3.12-dev python3-pip \
 && apt-get install --yes --quiet git wget gcc g++ make zlib1g-dev zstd
 
-# Install uv from the official repository. The version is pinned for
-# reproducibility.
-COPY --from=ghcr.io/astral-sh/uv:0.9.24 /uv /uvx /bin/
+# Install uv via pip using Tsinghua PyPI mirror.
+RUN pip3 install --no-cache-dir uv==0.9.24 -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # UV_COMPILE_BYTECODE=1 speeds up future container starts.
 # UV_PROJECT_ENVIRONMENT explicitly sets the virtual environment location.
@@ -77,7 +80,8 @@ WORKDIR /app/alphafold
 # --no-editable: install as a static package.
 # If using this as a recipe for local installation, we recommend removing the
 # --frozen and --no-editable flags.
-RUN --mount=type=cache,target=/root/.cache/uv \ 
+ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+RUN --mount=type=cache,target=/root/.cache/uv \
     UV_LINK_MODE=copy uv sync --frozen --all-groups --no-editable
 
 # Build chemical components database (this binary was installed by uv sync).

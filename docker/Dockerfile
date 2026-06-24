@@ -34,7 +34,7 @@ apt-get update --quiet \
 && apt-get install --yes --quiet git wget gcc g++ make zlib1g-dev zstd
 
 # Install uv via pip using Tsinghua PyPI mirror.
-RUN pip3 install --no-cache-dir uv==0.9.24 -i https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip3 install --no-cache-dir --break-system-packages uv==0.9.24 -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # UV_COMPILE_BYTECODE=1 speeds up future container starts.
 # UV_PROJECT_ENVIRONMENT explicitly sets the virtual environment location.
@@ -52,10 +52,10 @@ ENV PATH="/hmmer/bin:/alphafold3_venv/bin:$PATH"
 # and the tar file published on GitHub is explicitly not recommended to be used
 # for building from source.
 
-# Download, check hash, and extract the HMMER source code.
-RUN mkdir /hmmer_build /hmmer ; \
-    wget http://eddylab.org/software/hmmer/hmmer-3.4.tar.gz --directory-prefix /hmmer_build ; \
-    (cd /hmmer_build && echo "ca70d94fd0cf271bd7063423aabb116d42de533117343a9b27a65c17ff06fbf3 hmmer-3.4.tar.gz" | sha256sum --check) && \
+# Copy, check hash, and extract the HMMER source code.
+RUN mkdir /hmmer_build /hmmer
+COPY docker/hmmer-3.4.tar.gz /hmmer_build/
+RUN (cd /hmmer_build && echo "ca70d94fd0cf271bd7063423aabb116d42de533117343a9b27a65c17ff06fbf3 hmmer-3.4.tar.gz" | sha256sum --check) && \
     (cd /hmmer_build && tar zxf hmmer-3.4.tar.gz && rm hmmer-3.4.tar.gz)
 
 # Apply the --seq_limit patch to HMMER.

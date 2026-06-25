@@ -1,80 +1,68 @@
-"""SQLite database connection management using aiosqlite."""
+"""Async database engine, session factory, and initialization for SQLite.
 
-import aiosqlite
+Uses SQLAlchemy 2.0 async API with aiosqlite as the driver.
+Provides:
+  - get_db: FastAPI dependency injection for database sessions
+  - init_db: create tables on startup
+  - close_db: dispose engine on shutdown
+"""
+
+from contextlib import asynccontextmanager
+
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from loguru import logger
 
 from api.config import settings
+from api.models import Base
 
-# Module-level connection reference
-_db: aiosqlite.Connection | None = None
+# Async engine and session factory (initialized in init_db)
+_engine = None
+_session_factory = None
 
 
-async def get_db() -> aiosqlite.Connection:
-    """Return the active database connection. Raises RuntimeError if not initialised."""
-    if _db is None:
+async def get_db():
+    """FastAPI dependency that yields an async database session."""
+    if _session_factory is None:
         raise RuntimeError("Database has not been initialised. Call init_db() first.")
-    return _db
+    async with _session_factory() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
 
 async def init_db() -> None:
-    """Open the database connection and create tables if they don't exist."""
-    global _db
+    """Create the async engine and all tables if they don't exist."""
+    global _engine, _session_factory
+
+    db_url = f"sqlite+aiosqlite:///{settings.DATABASE_PATH}"
     logger.info("Initialising database at {}", settings.DATABASE_PATH)
     settings.ensure_directories()
 
-    _db = await aiosqlite.connect(settings.DATABASE_PATH)
-    _db.row_factory = aiosqlite.Row
-    await _db.execute("PRAGMA journal_mode=WAL")
-    await _db.execute("PRAGMA foreign_keys=ON")
+    _engine = create_async_engine(
+        db_url,
+        echo=False,
+        connect_args={"check_same_thread": False},
+    )
+    _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
-    await _db.executescript(_SCHEMA_SQL)
-    await _db.commit()
+    async with _engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
     logger.info("Database initialised successfully")
 
 
 async def close_db() -> None:
-    """Close the database connection gracefully."""
-    global _db
-    if _db is not None:
-        await _db.close()
-        _db = None
+    """Dispose of the engine connection pool."""
+    global _engine, _session_factory
+    if _engine is not None:
+        await _engine.dispose()
+        _engine = None
+        _session_factory = None
         logger.info("Database connection closed")
-
-
-# ---------------------------------------------------------------------------
-# Schema
-# ---------------------------------------------------------------------------
-
-_SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS tasks (
-    id TEXT PRIMARY KEY,
-    job_name TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'completed',
-
-    -- input
-    input_json TEXT NOT NULL,
-    input_summary TEXT,
-
-    -- output
-    output_path TEXT,
-    best_seed INTEGER,
-    best_sample INTEGER,
-    best_ranking_score REAL,
-    best_ptm REAL,
-    best_iptm REAL,
-
-    -- stats
-    num_seeds INTEGER,
-    num_samples INTEGER,
-
-    -- timestamps
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    completed_at DATETIME,
-
-    -- error
-    error_message TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
-"""

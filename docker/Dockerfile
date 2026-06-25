@@ -81,6 +81,10 @@ WORKDIR /app/alphafold
 # If using this as a recipe for local installation, we recommend removing the
 # --frozen and --no-editable flags.
 ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+
+# Configure git to use GitHub mirror for FetchContent (C++ deps).
+RUN git config --global url."https://ghfast.top/https://github.com/".insteadOf "https://github.com/"
+
 RUN --mount=type=cache,target=/root/.cache/uv \
     UV_LINK_MODE=copy uv sync --all-groups --no-editable \
     --index-url https://pypi.tuna.tsinghua.edu.cn/simple

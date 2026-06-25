@@ -18,6 +18,7 @@ from loguru import logger
 import sys
 
 from api.config import settings
+from api.cleanup import start_cleanup, stop_cleanup
 from api.database import init_db, close_db
 from api.router import router as v1_router
 
@@ -82,8 +83,10 @@ async def lifespan(app: FastAPI):
         settings.PORT,
     )
     await init_db()
+    start_cleanup()
     logger.info("Application startup complete")
     yield
+    stop_cleanup()
     await close_db()
     logger.info("Application shutdown complete")
 

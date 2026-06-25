@@ -1,92 +1,80 @@
-"""Async database engine, session factory, and initialization for SQLite.
+"""SQLite database connection management using aiosqlite."""
 
-Uses SQLAlchemy 2.0 async API with aiosqlite as the driver.
-Provides:
-  - get_db: FastAPI dependency injection for database sessions
-  - init_db: creates all tables defined in models.py
-"""
+import aiosqlite
+from loguru import logger
 
-import os
-from typing import AsyncGenerator
+from api.config import settings
 
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-
-from api.models import Base
-
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
-DATABASE_PATH: str = os.getenv("DATABASE_PATH", "/app/data/alphafold3.db")
-
-# aiosqlite requires the sqlite+aiosqlite:// scheme
-DATABASE_URL: str = f"sqlite+aiosqlite:///{DATABASE_PATH}"
-
-# ---------------------------------------------------------------------------
-# Engine & session factory
-# ---------------------------------------------------------------------------
-
-engine = create_async_engine(
-    DATABASE_URL,
-    echo=False,
-    # SQLite-specific: allow same connection across threads is not needed
-    # with aiosqlite since each task gets its own connection.
-)
-
-async_session_factory = async_sessionmaker(
-    engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-)
+# Module-level connection reference
+_db: aiosqlite.Connection | None = None
 
 
-# ---------------------------------------------------------------------------
-# Dependency injection
-# ---------------------------------------------------------------------------
+async def get_db() -> aiosqlite.Connection:
+    """Return the active database connection. Raises RuntimeError if not initialised."""
+    if _db is None:
+        raise RuntimeError("Database has not been initialised. Call init_db() first.")
+    return _db
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """FastAPI dependency that yields an async database session.
-
-    Usage in a route::
-
-        @router.get("/example")
-        async def example(db: AsyncSession = Depends(get_db)):
-            ...
-    """
-    async with async_session_factory() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
-
-
-# ---------------------------------------------------------------------------
-# Database initialization
-# ---------------------------------------------------------------------------
 
 async def init_db() -> None:
-    """Create all tables defined in models.Base metadata.
+    """Open the database connection and create tables if they don't exist."""
+    global _db
+    logger.info("Initialising database at {}", settings.DATABASE_PATH)
+    settings.ensure_directories()
 
-    Should be called once during application startup (lifespan event).
-    Tables are created only if they do not already exist.
-    """
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    _db = await aiosqlite.connect(settings.DATABASE_PATH)
+    _db.row_factory = aiosqlite.Row
+    await _db.execute("PRAGMA journal_mode=WAL")
+    await _db.execute("PRAGMA foreign_keys=ON")
 
+    await _db.executescript(_SCHEMA_SQL)
+    await _db.commit()
+    logger.info("Database initialised successfully")
 
-# ---------------------------------------------------------------------------
-# Cleanup
-# ---------------------------------------------------------------------------
 
 async def close_db() -> None:
-    """Dispose of the engine connection pool.
+    """Close the database connection gracefully."""
+    global _db
+    if _db is not None:
+        await _db.close()
+        _db = None
+        logger.info("Database connection closed")
 
-    Should be called during application shutdown.
-    """
-    await engine.dispose()
+
+# ---------------------------------------------------------------------------
+# Schema
+# ---------------------------------------------------------------------------
+
+_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    job_name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'completed',
+
+    -- input
+    input_json TEXT NOT NULL,
+    input_summary TEXT,
+
+    -- output
+    output_path TEXT,
+    best_seed INTEGER,
+    best_sample INTEGER,
+    best_ranking_score REAL,
+    best_ptm REAL,
+    best_iptm REAL,
+
+    -- stats
+    num_seeds INTEGER,
+    num_samples INTEGER,
+
+    -- timestamps
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    completed_at DATETIME,
+
+    -- error
+    error_message TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
+"""

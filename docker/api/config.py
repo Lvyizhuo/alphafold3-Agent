@@ -14,6 +14,10 @@ class Settings:
     PORT: int = int(os.getenv("PORT", "8015"))
     DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
 
+    # Aliases for compatibility
+    API_HOST: str = HOST
+    API_PORT: int = PORT
+
     # --- Database ---
     DATABASE_PATH: str = os.getenv("DATABASE_PATH", "/app/data/alphafold3.db")
 

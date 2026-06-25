@@ -179,8 +179,7 @@ if(GXX_LIBSTDCPP)
 
 			FetchContent_Declare(
 				boost-rx
-				GIT_REPOSITORY https://github.com/boostorg/regex
-				GIT_TAG boost-1.83.0)
+				SOURCE_DIR ${CMAKE_SOURCE_DIR}/deps/boost-regex)
 
 			FetchContent_MakeAvailable(boost-rx)
 		endif()
@@ -235,8 +234,7 @@ else()
 	# Create a private copy of eigen3 and populate it only, no need to build
 	FetchContent_Declare(
 		my-eigen3
-		GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
-		GIT_TAG 3.4.0)
+		SOURCE_DIR ${CMAKE_SOURCE_DIR}/deps/eigen)
 
 	FetchContent_GetProperties(my-eigen3)
 

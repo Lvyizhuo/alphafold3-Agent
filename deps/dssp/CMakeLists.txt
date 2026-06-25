@@ -108,8 +108,7 @@ if(NOT libmcfp_FOUND)
 	FetchContent_Declare(
 		libmcfp
 		${EXLC}
-		GIT_REPOSITORY https://github.com/mhekkel/libmcfp
-		GIT_TAG v1.3.1)
+		SOURCE_DIR ${CMAKE_SOURCE_DIR}/deps/libmcfp)
 
 	FetchContent_MakeAvailable(libmcfp)
 endif()
@@ -122,8 +121,7 @@ if(NOT cifpp_FOUND)
 	FetchContent_Declare(
 		cifpp
 		${EXLC}
-		GIT_REPOSITORY https://github.com/pdb-redo/libcifpp.git
-		GIT_TAG v7.0.3
+		SOURCE_DIR ${CMAKE_SOURCE_DIR}/deps/libcifpp
 	)
 
 	FetchContent_MakeAvailable(cifpp)

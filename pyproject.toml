@@ -39,6 +39,7 @@ environments = [
 ]
 
 [tool.scikit-build]
+cmake.args = ["-DBUILD_TESTING=OFF"]
 wheel.exclude = [
     "**.pyx",
     "**/CMakeLists.txt",

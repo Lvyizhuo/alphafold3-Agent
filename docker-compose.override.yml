@@ -1,0 +1,11 @@
+# Development overrides — hot-reload API code without rebuilding.
+# Usage: docker-compose up          (auto-loads override)
+#        docker-compose -f docker-compose.yml up  (production, ignores this file)
+version: "3.8"
+
+services:
+  alphafold3-api:
+    volumes:
+      # Mount local api/ for live code editing
+      - ./api:/app/alphafold/api
+    command: ["python3", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8015", "--reload"]

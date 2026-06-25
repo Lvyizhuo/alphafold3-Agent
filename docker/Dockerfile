@@ -106,9 +106,9 @@ ENV XLA_CLIENT_MEM_FRACTION=0.95
 #  API 服务
 # ------------------------------------------------------------------ #
 
-# Install API Python dependencies.
+# Install API Python dependencies into the venv.
 COPY api/requirements.txt /tmp/api_requirements.txt
-RUN pip3 install --no-cache-dir --break-system-packages \
+RUN /alphafold3_venv/bin/pip install --no-cache-dir \
     -r /tmp/api_requirements.txt \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     && rm /tmp/api_requirements.txt

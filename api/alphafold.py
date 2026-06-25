@@ -324,8 +324,15 @@ class AlphaFoldRunner:
         Raises:
             RuntimeError: 输出文件缺失或格式错误。
         """
+        # run_alphafold.py may output files directly in task_output_dir
+        # or in a job_name subdirectory — detect which.
+        if (task_output_dir / job_name).is_dir():
+            output_dir = task_output_dir / job_name
+        else:
+            output_dir = task_output_dir
+
         # 读取 ranking_scores.csv
-        ranking_csv_path = task_output_dir / f"{job_name}_ranking_scores.csv"
+        ranking_csv_path = output_dir / f"{job_name}_ranking_scores.csv"
         all_predictions = self._parse_ranking_scores(ranking_csv_path)
 
         if not all_predictions:
@@ -337,7 +344,7 @@ class AlphaFoldRunner:
         best = max(all_predictions, key=lambda p: p.ranking_score)
 
         # 读取最佳预测的 summary_confidences.json
-        summary_path = task_output_dir / f"{job_name}_summary_confidences.json"
+        summary_path = output_dir / f"{job_name}_summary_confidences.json"
         summary = self._read_json(summary_path)
 
         # 从 summary 中补充最佳预测的详细指标
@@ -360,14 +367,14 @@ class AlphaFoldRunner:
         )
 
         # 文件路径
-        best_model_cif = task_output_dir / f"{job_name}_model.cif"
-        best_confidences_json = task_output_dir / f"{job_name}_confidences.json"
+        best_model_cif = output_dir / f"{job_name}_model.cif"
+        best_confidences_json = output_dir / f"{job_name}_confidences.json"
         best_summary_confidences_json = summary_path
-        data_json = task_output_dir / f"{job_name}_data.json"
+        data_json = output_dir / f"{job_name}_data.json"
 
         return InferenceOutput(
             job_name=job_name,
-            output_dir=str(task_output_dir),
+            output_dir=str(output_dir),
             best_seed=best.seed,
             best_sample=best.sample,
             best_ranking_score=best.ranking_score,

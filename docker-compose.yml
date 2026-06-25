@@ -32,7 +32,8 @@ services:
       - LOG_LEVEL=INFO
       - DATA_RETENTION_DAYS=30
       - MAX_UPLOAD_SIZE_MB=10
-      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_VISIBLE_DEVICES=0
+      - CUDA_VISIBLE_DEVICES=0
     deploy:
       resources:
         reservations:
@@ -41,7 +42,7 @@ services:
               count: all
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8015/api/v1/health')"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8015/health')"]
       interval: 60s
       timeout: 10s
       retries: 3

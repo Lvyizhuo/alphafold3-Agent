@@ -108,9 +108,10 @@ ENV XLA_CLIENT_MEM_FRACTION=0.95
 
 # Install API Python dependencies into the venv.
 COPY api/requirements.txt /tmp/api_requirements.txt
-RUN /alphafold3_venv/bin/pip install --no-cache-dir \
+RUN UV_PROJECT_ENVIRONMENT=/alphafold3_venv \
+    uv pip install --no-cache \
     -r /tmp/api_requirements.txt \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
     && rm /tmp/api_requirements.txt
 
 # Create directories for API runtime data.

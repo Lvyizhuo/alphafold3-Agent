@@ -31,8 +31,11 @@ class Settings:
     LOG_RETENTION: str = os.getenv("LOG_RETENTION", "30 days")
 
     # --- AlphaFold Model ---
+    ALPHAFOLD_DIR: str = os.getenv("ALPHAFOLD_DIR", "/app/alphafold")
     MODEL_DIR: str = os.getenv("MODEL_DIR", "/root/models")
     DB_DIR: str = os.getenv("DB_DIR", "/root/public_databases")
+    INPUT_DIR: str = os.getenv("INPUT_DIR", "/app/storage/inputs")
+    OUTPUT_DIR: str = os.getenv("OUTPUT_DIR", "/app/storage/outputs")
 
     # --- Business ---
     DATA_RETENTION_DAYS: int = int(os.getenv("DATA_RETENTION_DAYS", "30"))
@@ -41,6 +44,10 @@ class Settings:
 
     # --- CORS ---
     CORS_ORIGINS: list[str] = os.getenv("CORS_ORIGINS", "*").split(",")
+
+    @property
+    def upload_size_bytes(self) -> int:
+        return self.MAX_UPLOAD_SIZE_BYTES
 
     @property
     def database_url(self) -> str:

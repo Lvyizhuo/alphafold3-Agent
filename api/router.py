@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.config import settings
 from api.database import get_db
 from api.schemas import (
+    DNAPredictRequest,
     ErrorResponse,
     StatsResponse,
     TaskDetail,
@@ -38,6 +39,22 @@ from api.schemas import (
 )
 from api.service import TaskService
 from api.alphafold import AlphaFoldRunner
+
+
+# ---------------------------------------------------------------------------
+# DNA helpers
+# ---------------------------------------------------------------------------
+
+_COMPLEMENT = str.maketrans("ATCG", "TAGC")
+
+
+def reverse_complement(seq: str) -> str:
+    """生成 DNA 反向互补链。
+
+    例: "ATCG" -> complement "TAGC" -> reverse "CGAT"
+    即输入 5'→3' 的链，返回其互补链的 5'→3' 方向。
+    """
+    return seq.translate(_COMPLEMENT)[::-1]
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +207,107 @@ async def predict(
 
     logger.info(
         "预测请求完成: task_id=%s, status=%s",
+        task_id, task.status,
+    )
+    return detail
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/predict/dna
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/api/v1/predict/dna",
+    response_model=TaskDetail,
+    status_code=200,
+    summary="DNA 结构预测（EVO2 输出专用）",
+    description=(
+        "接收 EVO2 生成的 DNA 序列，自动构建 AlphaFold 3 输入 JSON 并执行推理。"
+        "前端先调用 EVO2 生成序列，再将序列传入此接口完成结构预测。"
+    ),
+    responses={
+        400: {"model": ErrorResponse, "description": "输入格式错误"},
+        500: {"model": ErrorResponse, "description": "推理失败"},
+    },
+)
+async def predict_dna(
+    body: DNAPredictRequest,
+    db: AsyncSession = Depends(get_db),
+    service: TaskService = Depends(get_service),
+) -> TaskDetail:
+    """DNA structure prediction endpoint for EVO2 output.
+
+    Flow:
+    1. Validate DNA sequence (A/T/C/G only).
+    2. Generate reverse-complement strand for double-strand prediction.
+    3. Build AlphaFold 3 input JSON with both strands.
+    4. Create task record in DB.
+    5. Run AlphaFold 3 inference (blocking).
+    6. Return full task detail including predictions.
+    """
+    # --- 1. Build AlphaFold 3 input JSON with double strand ---
+    task_name = body.name or f"dna_evo2_{uuid.uuid4().hex[:8]}"
+    forward_seq = body.sequence  # 正向链 (5'→3')
+    reverse_seq = reverse_complement(forward_seq)  # 反向互补链 (5'→3')
+
+    input_json = {
+        "name": task_name,
+        "modelSeeds": body.modelSeeds or [42],
+        "sequences": [
+            {
+                "dna": {
+                    "id": "A",
+                    "sequence": forward_seq,
+                }
+            },
+            {
+                "dna": {
+                    "id": "B",
+                    "sequence": reverse_seq,
+                }
+            },
+        ],
+        "dialect": "alphafold3",
+        "version": 1,
+    }
+
+    logger.info(
+        "DNA 双链构建: A链=%dbp, B链=%dbp (反向互补)",
+        len(forward_seq), len(reverse_seq),
+    )
+
+    # --- 2. Generate task ID ---
+    task_id = str(uuid.uuid4())
+    logger.info(
+        "收到 DNA 预测请求: task_id=%s, name=%s, seq_len=%d",
+        task_id, task_name, len(body.sequence),
+    )
+
+    # --- 3. Create task ---
+    try:
+        task = await service.create_task(db, input_json, task_id)
+    except ValueError as exc:
+        raise _error_response(
+            status_code=400,
+            code="INVALID_INPUT",
+            message="构建 AlphaFold 3 输入失败",
+            details=str(exc)[:500],
+        )
+
+    # --- 4. Run inference (blocking) ---
+    task = await service.run_inference(db, task, input_json)
+
+    # --- 5. Build response ---
+    detail = await service.get_task(db, task_id)
+    if detail is None:
+        raise _error_response(
+            status_code=500,
+            code="INTERNAL_ERROR",
+            message="任务创建成功但无法读取结果",
+        )
+
+    logger.info(
+        "DNA 预测完成: task_id=%s, status=%s",
         task_id, task.status,
     )
     return detail

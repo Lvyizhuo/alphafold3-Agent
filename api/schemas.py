@@ -60,6 +60,46 @@ class TaskCreate(BaseModel):
         return v
 
 
+class DNAPredictRequest(BaseModel):
+    """Request schema for DNA structure prediction from EVO2 output.
+
+    Accepts a DNA sequence (from EVO2 generation) and automatically:
+    1. Generates the reverse-complement strand (B chain).
+    2. Builds the AlphaFold 3 input JSON for double-strand DNA prediction.
+    """
+
+    sequence: str = Field(
+        ...,
+        min_length=1,
+        max_length=10000,
+        description="DNA 正向链序列（仅包含 A/T/C/G 碱基）。互补链自动生成。",
+        examples=["ATCGATCGATCGATCG"],
+    )
+    name: Optional[str] = Field(
+        default=None,
+        max_length=255,
+        description="任务名称。不填则自动生成。",
+        examples=["dna_evo2_prediction"],
+    )
+    modelSeeds: Optional[List[int]] = Field(
+        default=None,
+        description="随机种子列表。不填则默认使用 [42]。",
+        examples=[[42]],
+    )
+
+    @field_validator("sequence")
+    @classmethod
+    def validate_dna_sequence(cls, v: str) -> str:
+        v = v.strip().upper()
+        valid_bases = set("ATCG")
+        invalid = set(v) - valid_bases
+        if invalid:
+            raise ValueError(
+                f"DNA 序列包含非法字符: {invalid}。仅允许 A/T/C/G。"
+            )
+        return v
+
+
 # ---------------------------------------------------------------------------
 # Prediction response schemas
 # ---------------------------------------------------------------------------

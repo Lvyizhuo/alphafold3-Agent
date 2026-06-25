@@ -15,11 +15,11 @@ services:
       # AlphaFold 3 search databases (read-only)
       - /data2/ntt/lvyizhuo/alphafold3/databases:/root/public_databases:ro
       # Task storage (inputs + outputs, read-write)
-      - alphafold3-storage:/app/storage
+      - ./storage:/app/storage
       # SQLite database persistence
-      - alphafold3-db:/app/data
+      - ./data:/app/data
       # Log persistence
-      - alphafold3-logs:/app/logs
+      - ./logs:/app/logs
     environment:
       - API_HOST=0.0.0.0
       - API_PORT=8015
@@ -47,8 +47,3 @@ services:
       timeout: 10s
       retries: 3
       start_period: 120s
-
-volumes:
-  alphafold3-storage:
-  alphafold3-db:
-  alphafold3-logs:

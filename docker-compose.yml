@@ -1,0 +1,53 @@
+version: "3.8"
+
+services:
+  alphafold3-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: alphafold3-api
+    restart: unless-stopped
+    ports:
+      - "8015:8015"
+    volumes:
+      # AlphaFold 3 model weights (read-only)
+      - /root/models:/root/models:ro
+      # AlphaFold 3 search databases (read-only)
+      - /root/public_databases:/root/public_databases:ro
+      # Task storage (inputs + outputs, read-write)
+      - alphafold3-storage:/app/storage
+      # SQLite database persistence
+      - alphafold3-db:/app/data
+      # Log persistence
+      - alphafold3-logs:/app/logs
+    environment:
+      - API_HOST=0.0.0.0
+      - API_PORT=8015
+      - ALPHAFOLD_DIR=/app/alphafold
+      - MODEL_DIR=/root/models
+      - DB_DIR=/root/public_databases
+      - STORAGE_PATH=/app/storage
+      - DATABASE_PATH=/app/data/alphafold3.db
+      - LOG_FILE=/app/logs/app.log
+      - LOG_LEVEL=INFO
+      - DATA_RETENTION_DAYS=30
+      - MAX_UPLOAD_SIZE_MB=10
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8015/api/v1/health')"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+volumes:
+  alphafold3-storage:
+  alphafold3-db:
+  alphafold3-logs:

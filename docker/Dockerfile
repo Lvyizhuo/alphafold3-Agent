@@ -102,4 +102,37 @@ ENV XLA_FLAGS="--xla_gpu_enable_triton_gemm=false"
 ENV XLA_PYTHON_CLIENT_PREALLOCATE=true
 ENV XLA_CLIENT_MEM_FRACTION=0.95
 
-CMD ["uv", "run", "python3", "run_alphafold.py"]
+# ------------------------------------------------------------------ #
+#  API 服务
+# ------------------------------------------------------------------ #
+
+# Install API Python dependencies.
+COPY docker/api/requirements.txt /tmp/api_requirements.txt
+RUN pip3 install --no-cache-dir --break-system-packages \
+    -r /tmp/api_requirements.txt \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    && rm /tmp/api_requirements.txt
+
+# Copy API application code (already included by COPY . above, but ensure
+# it is present even if .dockerignore changes in the future).
+COPY api/ /app/alphafold/api/
+# The root api/ directory does not include main.py; copy the Docker-specific
+# entry point that is compatible with the root config (API_HOST / API_PORT).
+COPY docker/api/main.py /app/alphafold/api/main.py
+
+# Create directories for API runtime data.
+RUN mkdir -p /app/data /app/storage /app/logs
+
+# API service environment variables.
+ENV API_HOST=0.0.0.0
+ENV API_PORT=8015
+ENV ALPHAFOLD_DIR=/app/alphafold
+ENV MODEL_DIR=/root/models
+ENV DB_DIR=/root/public_databases
+ENV STORAGE_PATH=/app/storage
+ENV DATABASE_PATH=/app/data/alphafold3.db
+ENV LOG_FILE=/app/logs/app.log
+
+EXPOSE 8015
+
+CMD ["python3", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8015"]

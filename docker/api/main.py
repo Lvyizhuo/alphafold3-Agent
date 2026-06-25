@@ -18,7 +18,6 @@ from loguru import logger
 import sys
 
 from api.config import settings
-from api.cleanup import start_cleanup, stop_cleanup
 from api.database import init_db, close_db
 from api.router import router as v1_router
 
@@ -54,8 +53,8 @@ def _configure_logging() -> None:
             "{name}:{function}:{line} - "
             "{message}"
         ),
-        rotation=settings.LOG_ROTATION,
-        retention=settings.LOG_RETENTION,
+        rotation="7 days",
+        retention="30 days",
         compression="gz",
         encoding="utf-8",
     )
@@ -77,16 +76,14 @@ async def lifespan(app: FastAPI):
     _configure_logging()
     logger.info(
         "Starting {} v{} (host={}, port={})",
-        settings.APP_NAME,
-        settings.APP_VERSION,
-        settings.HOST,
-        settings.PORT,
+        "AlphaFold3 Inference API",
+        "1.0.0",
+        settings.API_HOST,
+        settings.API_PORT,
     )
     await init_db()
-    start_cleanup()
     logger.info("Application startup complete")
     yield
-    stop_cleanup()
     await close_db()
     logger.info("Application shutdown complete")
 
@@ -96,8 +93,8 @@ async def lifespan(app: FastAPI):
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title=settings.APP_NAME,
-    version=settings.APP_VERSION,
+    title="AlphaFold3 Inference API",
+    version="1.0.0",
     description="RESTful API wrapping AlphaFold 3 protein-structure prediction",
     lifespan=lifespan,
 )
@@ -105,7 +102,7 @@ app = FastAPI(
 # --- CORS middleware ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -123,8 +120,8 @@ app.include_router(v1_router)
 async def root():
     """Service information."""
     return {
-        "service": settings.APP_NAME,
-        "version": settings.APP_VERSION,
+        "service": "AlphaFold3 Inference API",
+        "version": "1.0.0",
         "docs": "/docs",
         "api_prefix": "/api/v1",
     }
@@ -139,7 +136,7 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "api.main:app",
-        host=settings.HOST,
-        port=settings.PORT,
-        reload=settings.DEBUG,
+        host=settings.API_HOST,
+        port=settings.API_PORT,
+        reload=False,
     )

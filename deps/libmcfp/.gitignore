@@ -1,0 +1,4 @@
+build
+.vscode
+docs/api
+docs/conf.py

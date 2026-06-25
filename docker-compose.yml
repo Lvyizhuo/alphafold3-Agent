@@ -11,9 +11,9 @@ services:
       - "8015:8015"
     volumes:
       # AlphaFold 3 model weights (read-only)
-      - /root/models:/root/models:ro
+      - /data2/ntt/lvyizhuo/alphafold3/weights:/root/models:ro
       # AlphaFold 3 search databases (read-only)
-      - /root/public_databases:/root/public_databases:ro
+      - /data2/ntt/lvyizhuo/alphafold3/databases:/root/public_databases:ro
       # Task storage (inputs + outputs, read-write)
       - alphafold3-storage:/app/storage
       # SQLite database persistence

@@ -107,18 +107,11 @@ ENV XLA_CLIENT_MEM_FRACTION=0.95
 # ------------------------------------------------------------------ #
 
 # Install API Python dependencies.
-COPY docker/api/requirements.txt /tmp/api_requirements.txt
+COPY api/requirements.txt /tmp/api_requirements.txt
 RUN pip3 install --no-cache-dir --break-system-packages \
     -r /tmp/api_requirements.txt \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     && rm /tmp/api_requirements.txt
-
-# Copy API application code (already included by COPY . above, but ensure
-# it is present even if .dockerignore changes in the future).
-COPY api/ /app/alphafold/api/
-# The root api/ directory does not include main.py; copy the Docker-specific
-# entry point that is compatible with the root config (API_HOST / API_PORT).
-COPY docker/api/main.py /app/alphafold/api/main.py
 
 # Create directories for API runtime data.
 RUN mkdir -p /app/data /app/storage /app/logs

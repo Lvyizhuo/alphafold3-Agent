@@ -5,7 +5,7 @@
 | 字段 | 内容 |
 |------|------|
 | 项目名称 | AlphaFold 3 推理服务 API |
-| 文档版本 | v3.0 |
+| 文档版本 | v4.0 |
 | 创建日期 | 2026-06-25 |
 | 最后更新 | 2026-06-25 |
 | 负责人 | lvyizhuo |
@@ -30,9 +30,9 @@
 ### 1.3 问题与挑战
 
 - 模型仅提供命令行接口，无法直接被前端或智能体调用
-- 推理过程耗时较长（取决于序列长度），需要异步处理
+- 推理过程耗时较长（取决于序列长度），前端需要等待结果返回
 - 输出结果包含多个文件，需要结构化处理以便前端渲染
-- 需要任务状态管理和历史结果存储
+- 需要历史结果存储以便后续查询和下载
 
 ---
 
@@ -42,22 +42,21 @@
 
 将 AlphaFold 3 模型的推理能力封装为标准 RESTful API 服务，支持：
 
-1. 前端界面上传单个 JSON 文件并提交预测任务
-2. 后台异步执行推理任务（单卡阻塞模式）
-3. 保存历史计算结果，支持查询、预览和下载
-4. 自动清理过期数据（30 天）
+1. 前端界面上传单个 JSON 文件并同步获取预测结果
+2. 保存历史计算结果，支持查询、预览和下载
+3. 自动清理过期数据（30 天）
 
 ### 2.2 项目范围
 
 **在范围内：**
-- 单文件上传推理接口
-- 任务状态查询接口
+- 单文件上传同步推理接口
 - 历史结果查询和下载接口
 - 结果数据解析（置信度指标提取）
 - 自动数据清理
 
 **不在范围内：**
 - 批量上传功能（后续版本考虑）
+- 异步任务队列（后续版本考虑）
 - 前端界面开发
 - 用户认证系统
 - 分布式部署
@@ -66,8 +65,7 @@
 
 | 指标 | 目标值 |
 |------|--------|
-| API 响应时间（提交任务） | < 500ms |
-| 任务状态查询响应时间 | < 100ms |
+| API 响应时间（非推理） | < 500ms |
 | 推理任务成功率 | > 95% |
 | 系统可用性 | > 99% |
 
@@ -84,38 +82,30 @@
 
 ### 3.2 核心用户场景
 
-#### 场景 1：提交预测任务
+#### 场景 1：提交预测任务并获取结果
 
 ```
 用户 -> 前端界面 -> 上传单个 AlphaFold 3 格式的 JSON 文件
                   -> 提交预测任务
-                  -> 获得任务 ID
+                  -> 等待推理完成（无超时限制）
+                  -> 获得完整的预测结果（置信度指标、结构文件链接等）
 ```
 
-#### 场景 2：查询任务状态
+#### 场景 2：查看历史结果
 
 ```
-用户 -> 前端界面 -> 输入任务 ID 或从历史列表选择
-                  -> 查看任务状态（pending/running/completed/failed）
-                  -> 查看推理进度（如有）
-```
-
-#### 场景 3：查看和下载结果
-
-```
-用户 -> 前端界面 -> 任务完成后进入结果页面
+用户 -> 前端界面 -> 从历史列表选择任务
                   -> 查看置信度摘要（pTM、ipTM、ranking_score）
                   -> 预览结构数据
                   -> 下载 CIF 结构文件
                   -> 下载完整结果包（ZIP）
 ```
 
-#### 场景 4：智能体集成调用
+#### 场景 3：智能体集成调用
 
 ```
-智能体 -> 调用 POST /api/v1/predict 提交任务
-        -> 轮询 GET /api/v1/tasks/{task_id} 等待完成
-        -> 调用 GET /api/v1/tasks/{task_id}/results 获取结构化结果
+智能体 -> 调用 POST /api/v1/predict 提交 JSON 文件
+        -> 等待推理完成，直接获得完整结果
         -> 将结果整合到智能体工作流中
 ```
 
@@ -123,11 +113,11 @@
 
 ## 4. 功能需求
 
-### 4.1 任务提交模块
+### 4.1 预测接口模块
 
-#### 4.1.1 提交预测任务
+#### 4.1.1 提交预测任务（同步）
 
-**功能描述**：接收用户上传的单个 AlphaFold 3 输入 JSON 文件，创建预测任务
+**功能描述**：接收用户上传的单个 AlphaFold 3 输入 JSON 文件，同步执行推理并返回完整结果。客户端需等待推理完成，无超时限制。
 
 **接口**：`POST /api/v1/predict`
 
@@ -137,55 +127,16 @@
 |------|------|------|------|
 | file | File | 是 | AlphaFold 3 格式的 JSON 文件 |
 
-**输出**：
-
-```json
-{
-  "task_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "pending",
-  "position_in_queue": 3,
-  "created_at": "2026-06-25T10:00:00Z",
-  "message": "任务已提交，当前队列位置：3"
-}
-```
-
-**业务规则**：
-- 每次只接收单个 JSON 文件
-- 验证输入 JSON 格式是否符合 AlphaFold 3 规范
-- 检查 JSON 中的 `dialect` 字段必须为 `alphafold3`
-- 检查 `sequences` 字段不为空
-- 单个 JSON 文件大小不超过 10MB
-- 任务按照 FIFO 顺序排队处理
-
-**任务状态枚举**：
-
-| 状态 | 说明 |
-|------|------|
-| pending | 等待处理（在队列中） |
-| running | 正在运行 |
-| completed | 已完成 |
-| failed | 失败 |
-
-### 4.2 任务查询模块
-
-#### 4.2.1 查询任务状态
-
-**功能描述**：根据任务 ID 查询任务当前状态和进度
-
-**接口**：`GET /api/v1/tasks/{task_id}`
-
-**输出**：
+**输出**（推理成功时）：
 
 ```json
 {
   "task_id": "550e8400-e29b-41d4-a716-446655440000",
   "status": "completed",
   "job_name": "test_protein",
-  "created_at": "2026-06-25T02:50:00Z",
-  "started_at": "2026-06-25T02:50:05Z",
-  "completed_at": "2026-06-25T02:51:32Z",
-  "duration_seconds": 87,
-  "position_in_queue": null,
+  "created_at": "2026-06-25T10:00:00Z",
+  "completed_at": "2026-06-25T10:05:30Z",
+  "duration_seconds": 330,
   "input_summary": {
     "name": "test_protein",
     "sequences": [
@@ -198,28 +149,73 @@
     "num_seeds": 1,
     "num_samples": 5
   },
-  "error_message": null
+  "best_prediction": {
+    "seed": 42,
+    "sample": 0,
+    "ranking_score": 0.85,
+    "ptm": 0.75,
+    "iptm": 0.82,
+    "fraction_disordered": 0.05,
+    "has_clash": false,
+    "chain_ptm": [0.78],
+    "chain_iptm": [0.81],
+    "chain_pair_iptm": [[0.78]],
+    "chain_pair_pae_min": [[0.5]]
+  },
+  "all_predictions": [
+    {
+      "seed": 42,
+      "sample": 0,
+      "ranking_score": 0.85,
+      "ptm": 0.75,
+      "iptm": 0.82
+    },
+    {
+      "seed": 42,
+      "sample": 1,
+      "ranking_score": 0.82,
+      "ptm": 0.73,
+      "iptm": 0.80
+    }
+  ],
+  "files": {
+    "best_model_cif": "/api/v1/tasks/550e8400-e29b-41d4-a716-446655440000/files/model.cif",
+    "data_json": "/api/v1/tasks/550e8400-e29b-41d4-a716-446655440000/files/data.json",
+    "ranking_scores_csv": "/api/v1/tasks/550e8400-e29b-41d4-a716-446655440000/files/ranking_scores.csv",
+    "download_zip": "/api/v1/tasks/550e8400-e29b-41d4-a716-446655440000/download"
+  }
 }
 ```
 
-**字段说明**：
+**输出**（推理失败时）：
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| task_id | String | 任务唯一标识 |
-| status | String | 任务状态 |
-| job_name | String | 任务名称（来自 JSON 的 name 字段） |
-| created_at | DateTime | 任务创建时间 |
-| started_at | DateTime | 任务开始执行时间 |
-| completed_at | DateTime | 任务完成时间 |
-| duration_seconds | Integer | 推理耗时（秒） |
-| position_in_queue | Integer | 队列位置（仅 pending 状态有值） |
-| input_summary | Object | 输入摘要信息 |
-| error_message | String | 错误信息（仅 failed 状态有值） |
+```json
+{
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "failed",
+  "job_name": "test_protein",
+  "created_at": "2026-06-25T10:00:00Z",
+  "completed_at": "2026-06-25T10:01:00Z",
+  "duration_seconds": 60,
+  "error_message": "GPU out of memory: sequence too long"
+}
+```
 
-#### 4.2.2 获取任务列表
+**业务规则**：
+- 每次只接收单个 JSON 文件
+- 验证输入 JSON 格式是否符合 AlphaFold 3 规范
+- 检查 JSON 中的 `dialect` 字段必须为 `alphafold3`
+- 检查 `sequences` 字段不为空
+- 单个 JSON 文件大小不超过 10MB
+- 推理过程中客户端阻塞等待，无超时限制
+- 如果已有推理任务在运行，新请求需等待前一个任务完成后才能开始（单卡阻塞模式）
+- 推理完成后，结果自动保存到数据库和文件系统
 
-**功能描述**：获取历史任务列表，支持分页和筛选
+### 4.2 历史记录模块
+
+#### 4.2.1 获取历史任务列表
+
+**功能描述**：获取历史任务列表，支持分页
 
 **接口**：`GET /api/v1/tasks`
 
@@ -229,7 +225,6 @@
 |------|------|------|------|
 | page | Integer | 否 | 页码（默认 1） |
 | page_size | Integer | 否 | 每页数量（默认 20，最大 100） |
-| status | String | 否 | 按状态筛选 |
 
 **输出**：
 
@@ -252,31 +247,69 @@
 }
 ```
 
-#### 4.2.3 取消任务
+#### 4.2.2 查询历史任务详情
 
-**功能描述**：取消正在等待的任务
+**功能描述**：根据任务 ID 查询历史任务详情和结果
 
-**接口**：`DELETE /api/v1/tasks/{task_id}`
-
-**业务规则**：
-- 只能取消 `pending` 状态的任务
-- `running` 状态的任务不支持取消（单卡阻塞模式）
-- `completed` 和 `failed` 状态的任务不支持取消
+**接口**：`GET /api/v1/tasks/{task_id}`
 
 **输出**：
 
 ```json
 {
-  "message": "任务已取消",
-  "task_id": "550e8400-e29b-41d4-a716-446655440000"
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "completed",
+  "job_name": "test_protein",
+  "created_at": "2026-06-25T02:50:00Z",
+  "completed_at": "2026-06-25T02:51:32Z",
+  "duration_seconds": 87,
+  "input_summary": {
+    "name": "test_protein",
+    "sequences": [
+      {
+        "type": "protein",
+        "id": "A",
+        "length": 200
+      }
+    ],
+    "num_seeds": 1,
+    "num_samples": 5
+  },
+  "best_prediction": {
+    "seed": 42,
+    "sample": 0,
+    "ranking_score": 0.85,
+    "ptm": 0.75,
+    "iptm": 0.82
+  },
+  "files": {
+    "best_model_cif": "/api/v1/tasks/550e8400-e29b-41d4-a716-446655440000/files/model.cif",
+    "download_zip": "/api/v1/tasks/550e8400-e29b-41d4-a716-446655440000/download"
+  },
+  "error_message": null
 }
 ```
 
-### 4.3 结果查询模块
+**字段说明**：
 
-#### 4.3.1 获取推理结果摘要
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| task_id | String | 任务唯一标识 |
+| status | String | 任务状态（completed/failed） |
+| job_name | String | 任务名称（来自 JSON 的 name 字段） |
+| created_at | DateTime | 任务创建时间 |
+| completed_at | DateTime | 任务完成时间 |
+| duration_seconds | Integer | 推理耗时（秒） |
+| input_summary | Object | 输入摘要信息 |
+| best_prediction | Object | 最佳预测的置信度指标 |
+| files | Object | 结果文件下载链接 |
+| error_message | String | 错误信息（仅 failed 状态有值） |
 
-**功能描述**：以 JSON 格式返回推理结果的摘要信息，包含所有预测的排名和置信度指标
+### 4.3 结果详情模块
+
+#### 4.3.1 获取推理结果详情
+
+**功能描述**：以 JSON 格式返回历史任务的完整推理结果，包含所有预测的排名和置信度指标
 
 **接口**：`GET /api/v1/tasks/{task_id}/results`
 
@@ -314,33 +347,13 @@
       "ranking_score": 0.82,
       "ptm": 0.73,
       "iptm": 0.80
-    },
-    {
-      "seed": 42,
-      "sample": 2,
-      "ranking_score": 0.79,
-      "ptm": 0.71,
-      "iptm": 0.78
-    },
-    {
-      "seed": 42,
-      "sample": 3,
-      "ranking_score": 0.76,
-      "ptm": 0.69,
-      "iptm": 0.75
-    },
-    {
-      "seed": 42,
-      "sample": 4,
-      "ranking_score": 0.73,
-      "ptm": 0.67,
-      "iptm": 0.72
     }
   ],
   "files": {
-    "best_model_cif": "/api/v1/tasks/{task_id}/files/model.cif",
-    "data_json": "/api/v1/tasks/{task_id}/files/data.json",
-    "ranking_scores_csv": "/api/v1/tasks/{task_id}/files/ranking_scores.csv"
+    "best_model_cif": "/api/v1/tasks/550e8400-e29b-41d4-a716-446655440000/files/model.cif",
+    "data_json": "/api/v1/tasks/550e8400-e29b-41d4-a716-446655440000/files/data.json",
+    "ranking_scores_csv": "/api/v1/tasks/550e8400-e29b-41d4-a716-446655440000/files/ranking_scores.csv",
+    "download_zip": "/api/v1/tasks/550e8400-e29b-41d4-a716-446655440000/download"
   }
 }
 ```
@@ -490,14 +503,8 @@ test_protein_results.zip
 {
   "tasks": {
     "total": 100,
-    "pending": 2,
-    "running": 1,
-    "completed": 95,
+    "completed": 98,
     "failed": 2
-  },
-  "queue": {
-    "length": 2,
-    "current_task_id": "550e8400-e29b-41d4-a716-446655440000"
   },
   "storage": {
     "used_bytes": 10737418240,
@@ -506,7 +513,7 @@ test_protein_results.zip
   },
   "performance": {
     "avg_inference_time_seconds": 300,
-    "success_rate": 0.97
+    "success_rate": 0.98
   }
 }
 ```
@@ -541,12 +548,12 @@ test_protein_results.zip
 
 ### 5.4 并发处理策略
 
-由于模型只能使用单张 GPU 进行推理，采用 **单卡阻塞模式**：
+由于模型只能使用单张 GPU 进行推理，采用 **同步阻塞模式**：
 
 - 同一时间只运行一个推理任务
-- 其他任务在队列中等待（FIFO 顺序）
-- 前端可以通过轮询获取任务状态更新
-- 队列长度无限制，但会在统计接口中展示
+- 新请求需等待前一个任务完成后才能开始
+- 客户端阻塞等待推理完成，无超时限制
+- 多个并发请求按到达顺序排队处理
 
 ### 5.5 日志与监控需求
 
@@ -571,11 +578,10 @@ test_protein_results.zip
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | /api/v1/predict | 提交预测任务 |
-| GET | /api/v1/tasks | 获取任务列表 |
-| GET | /api/v1/tasks/{task_id} | 查询任务状态 |
-| DELETE | /api/v1/tasks/{task_id} | 取消任务 |
-| GET | /api/v1/tasks/{task_id}/results | 获取推理结果摘要 |
+| POST | /api/v1/predict | 提交预测任务（同步阻塞，返回完整结果） |
+| GET | /api/v1/tasks | 获取历史任务列表 |
+| GET | /api/v1/tasks/{task_id} | 查询历史任务详情 |
+| GET | /api/v1/tasks/{task_id}/results | 获取历史任务完整结果 |
 | GET | /api/v1/tasks/{task_id}/results/confidences | 获取详细置信度 |
 | GET | /api/v1/tasks/{task_id}/files/{filename} | 下载结果文件 |
 | GET | /api/v1/tasks/{task_id}/download | 下载完整结果包 |
@@ -591,9 +597,9 @@ test_protein_results.zip
 | 400 | INVALID_DIALECT | dialect 字段不是 alphafold3 |
 | 404 | TASK_NOT_FOUND | 任务不存在 |
 | 404 | FILE_NOT_FOUND | 结果文件不存在 |
-| 409 | TASK_NOT_CANCELLABLE | 任务状态不支持取消 |
 | 413 | FILE_TOO_LARGE | 文件超过 10MB 限制 |
 | 500 | INTERNAL_ERROR | 服务器内部错误 |
+| 500 | INFERENCE_FAILED | 推理执行失败 |
 | 503 | GPU_UNAVAILABLE | GPU 资源不可用 |
 
 错误响应格式：
@@ -622,8 +628,7 @@ test_protein_results.zip
 CREATE TABLE tasks (
     id TEXT PRIMARY KEY,                    -- UUID
     job_name TEXT NOT NULL,                 -- 任务名称（来自 JSON）
-    status TEXT NOT NULL DEFAULT 'pending', -- pending/running/completed/failed
-    progress INTEGER DEFAULT 0,            -- 进度 0-100
+    status TEXT NOT NULL DEFAULT 'completed', -- completed/failed
 
     -- 输入信息
     input_json TEXT NOT NULL,              -- 原始输入 JSON
@@ -634,6 +639,8 @@ CREATE TABLE tasks (
     best_seed INTEGER,                     -- 最佳预测的 seed
     best_sample INTEGER,                   -- 最佳预测的 sample
     best_ranking_score REAL,               -- 最佳排名分数
+    best_ptm REAL,                         -- 最佳预测的 pTM
+    best_iptm REAL,                        -- 最佳预测的 ipTM
 
     -- 统计信息
     num_seeds INTEGER,                     -- 种子数量
@@ -641,7 +648,6 @@ CREATE TABLE tasks (
 
     -- 时间信息
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    started_at DATETIME,
     completed_at DATETIME,
 
     -- 错误信息
@@ -701,10 +707,9 @@ API 需要解析 AlphaFold 3 的输出文件，提取以下信息用于接口返
 
 | 组件 | 技术选型 | 说明 |
 |------|----------|------|
-| Web 框架 | FastAPI | 高性能异步 Web 框架 |
+| Web 框架 | FastAPI | 高性能 Web 框架 |
 | 日志 | loguru | 结构化日志库 |
 | 数据库 | SQLite | 轻量级关系数据库 |
-| 任务队列 | asyncio.Queue | 简单的异步队列 |
 | 文件存储 | 本地文件系统 | 宿主机挂载目录 |
 | 容器化 | Docker | 部署和运行环境 |
 | 序列化 | Pydantic | 数据验证和序列化 |
@@ -718,8 +723,8 @@ API 需要解析 AlphaFold 3 的输出文件，提取以下信息用于接口返
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │                    FastAPI Application                    │   │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐ │   │
-│  │  │  API Router  │  │  Middleware  │  │  Task Worker    │ │   │
-│  │  └─────────────┘  └─────────────┘  │  (单线程阻塞)    │ │   │
+│  │  │  API Router  │  │  Middleware  │  │  Inference      │ │   │
+│  │  └─────────────┘  └─────────────┘  │  (同步阻塞调用)  │ │   │
 │  │                                     └─────────────────┘ │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │         │                    │                      │           │
@@ -740,34 +745,24 @@ API 需要解析 AlphaFold 3 的输出文件，提取以下信息用于接口返
 
 ### 8.3 核心流程
 
-#### 任务提交流程
+#### 同步预测流程（POST /api/v1/predict）
 
 ```
 1. 用户上传 JSON 文件
-2. 验证 JSON 格式
-3. 保存输入文件到 /app/storage/tasks/{task_id}/input.json
-4. 创建数据库记录（status=pending）
-5. 将 task_id 加入 asyncio.Queue
-6. 返回 task_id 和队列位置
-```
-
-#### 任务执行流程
-
-```
-1. Worker 从队列取出 task_id
-2. 更新数据库状态为 running
-3. 调用 run_alphafold.py：
+2. 验证 JSON 格式（dialect、sequences 等）
+3. 生成 task_id，保存输入文件到 /app/storage/tasks/{task_id}/input.json
+4. 同步调用 run_alphafold.py：
    python run_alphafold.py \
      --json_path=/app/storage/tasks/{task_id}/input.json \
      --model_dir=/root/models \
      --output_dir=/app/storage/tasks/{task_id}/output
-4. 等待执行完成
-5. 解析输出结果，提取置信度指标
-6. 更新数据库（status=completed，结果信息）
-7. 继续处理下一个任务
+5. 等待执行完成（客户端阻塞等待，无超时限制）
+6. 解析输出结果，提取置信度指标
+7. 保存到数据库（status=completed 或 failed）
+8. 返回完整结果 JSON 给客户端
 ```
 
-#### 结果查询流程
+#### 历史查询流程
 
 ```
 1. 前端请求 GET /api/v1/tasks/{task_id}/results
@@ -798,8 +793,8 @@ API 需要解析 AlphaFold 3 的输出文件，提取以下信息用于接口返
 │   │   │       └── results.py       # 结果接口
 │   │   ├── core/
 │   │   │   ├── alphafold.py         # AlphaFold 调用
-│   │   │   ├── task_manager.py      # 任务管理
-│   │   │   └── storage.py           # 文件存储
+│   │   │   ├── storage.py           # 文件存储
+│   │   │   └── cleanup.py           # 数据清理
 │   │   ├── models/
 │   │   │   ├── task.py              # 数据库模型
 │   │   │   └── schemas.py           # Pydantic 模型
@@ -883,7 +878,6 @@ services:
       - LOG_FILE=/app/logs/app.log
       - MODEL_DIR=/root/models
       - DB_DIR=/root/public_databases
-      - TASK_TIMEOUT=7200
       - DATA_RETENTION_DAYS=30
     runtime: nvidia
     deploy:
@@ -906,7 +900,6 @@ services:
 | LOG_FILE | 日志文件路径 | /app/logs/app.log |
 | MODEL_DIR | 模型参数目录 | /root/models |
 | DB_DIR | 数据库目录 | /root/public_databases |
-| TASK_TIMEOUT | 任务超时时间（秒） | 7200 |
 | DATA_RETENTION_DAYS | 数据保留天数 | 30 |
 
 ### 9.4 启动命令
@@ -961,34 +954,36 @@ docker-compose down
 
 | 场景 | 测试内容 | 预期结果 |
 |------|----------|----------|
-| 正常提交 | 上传有效 JSON | 返回 task_id，状态为 pending |
+| 正常提交 | 上传有效 JSON | 同步返回完整结果（task_id、置信度、文件链接） |
 | 无效 JSON | 上传格式错误的 JSON | 返回 400 错误 |
-| 查询状态 | 查询存在的 task_id | 返回任务状态和详情 |
+| 查询历史 | 查询存在的 task_id | 返回任务详情和结果 |
 | 查询不存在 | 查询不存在的 task_id | 返回 404 错误 |
-| 取消任务 | 取消 pending 状态任务 | 任务被取消 |
-| 取消运行中 | 取消 running 状态任务 | 返回 409 错误 |
-| 获取结果 | 查询已完成任务的结果 | 返回置信度数据 |
+| 获取历史列表 | GET /api/v1/tasks | 返回分页任务列表 |
+| 获取结果详情 | 查询已完成任务的结果 | 返回置信度数据 |
 | 下载文件 | 下载 CIF 文件 | 返回文件内容 |
 | 下载 ZIP | 下载完整结果包 | 返回 ZIP 文件 |
 
 ### 10.3 测试命令
 
 ```bash
-# 提交任务
+# 提交任务（同步等待结果）
 curl -X POST http://localhost:8015/api/v1/predict \
   -F "file=@test_input.json"
 
-# 查询任务状态
+# 查询历史任务详情
 curl http://localhost:8015/api/v1/tasks/{task_id}
 
-# 获取任务列表
+# 获取历史任务列表
 curl http://localhost:8015/api/v1/tasks
 
-# 获取结果
+# 获取历史任务结果
 curl http://localhost:8015/api/v1/tasks/{task_id}/results
 
 # 下载文件
 curl -O http://localhost:8015/api/v1/tasks/{task_id}/files/model.cif
+
+# 下载完整结果包
+curl -O http://localhost:8015/api/v1/tasks/{task_id}/download
 
 # 健康检查
 curl http://localhost:8015/api/v1/health
@@ -1019,16 +1014,15 @@ curl http://localhost:8015/api/v1/health
 
 #### 第 2 周：核心功能
 - [ ] 实现 AlphaFold 调用封装（run_alphafold.py）
-- [ ] 实现任务管理器（FIFO 队列）
 - [ ] 实现文件存储管理器
-- [ ] 实现异步任务 Worker
+- [ ] 实现结果解析逻辑
+- [ ] 实现数据清理任务
 
 #### 第 3 周：接口实现
-- [ ] 实现预测任务接口（POST /api/v1/predict）
-- [ ] 实现任务查询接口（GET /api/v1/tasks）
+- [ ] 实现同步预测接口（POST /api/v1/predict）
+- [ ] 实现历史任务查询接口（GET /api/v1/tasks）
 - [ ] 实现结果获取接口（GET /api/v1/tasks/{id}/results）
 - [ ] 实现文件下载接口
-- [ ] 实现结果解析逻辑
 - [ ] 实现健康检查和统计接口
 
 #### 第 4 周：测试部署
@@ -1044,11 +1038,12 @@ curl http://localhost:8015/api/v1/health
 
 | 风险 | 影响 | 概率 | 应对措施 |
 |------|------|------|----------|
-| 推理时间过长 | 用户体验差 | 高 | 提供队列位置和进度反馈 |
+| 推理时间过长 | 客户端长时间等待 | 高 | 前端显示等待提示，无超时限制 |
 | 存储空间不足 | 无法保存结果 | 中 | 自动清理 30 天前数据 |
-| 模型推理失败 | 任务失败 | 中 | 记录错误信息，支持重试 |
-| Docker 容器异常 | 服务中断 | 低 | 设置超时，异常捕获 |
+| 模型推理失败 | 任务失败 | 中 | 记录错误信息，返回失败状态 |
+| Docker 容器异常 | 服务中断 | 低 | 异常捕获，返回错误信息 |
 | GPU 内存不足 | 推理失败 | 中 | 限制序列长度，优化配置 |
+| 并发请求阻塞 | 响应延迟 | 高 | 单卡阻塞模式，按顺序处理 |
 
 ---
 
@@ -1082,6 +1077,7 @@ curl http://localhost:8015/api/v1/health
 | v1.0 | 2026-06-25 | lvyizhuo | 初始版本 |
 | v2.0 | 2026-06-25 | lvyizhuo | 简化设计：单文件上传、FIFO 队列、30 天数据清理、无认证 |
 | v3.0 | 2026-06-25 | lvyizhuo | 明确部署方案：端口 8015、SQLite 外部、Docker 容器部署、目录结构 |
+| v4.0 | 2026-06-25 | lvyizhuo | 同步接口设计：移除异步队列，POST /api/v1/predict 同步阻塞返回完整结果，保留历史记录查询 |
 
 ---
 

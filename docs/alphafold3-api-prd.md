@@ -5,7 +5,7 @@
 | 字段 | 内容 |
 |------|------|
 | 项目名称 | AlphaFold 3 推理服务 API |
-| 文档版本 | v2.0 |
+| 文档版本 | v3.0 |
 | 创建日期 | 2026-06-25 |
 | 最后更新 | 2026-06-25 |
 | 负责人 | lvyizhuo |
@@ -22,7 +22,7 @@
 ### 1.2 当前状态
 
 - AlphaFold 3 模型代码仓库已完成部署
-- 模型推理所需的数据库和权重文件已下载
+- 模型推理所需的数据库和权重文件已下载，路径：`/data2/ntt/lvyizhuo/alphafold3/`
 - Docker 镜像已在服务器上构建完成
 - 模型已成功运行，验证通过
 - 模型仅支持通过命令行调用，输入为 JSON 文件，输出为多个结果文件
@@ -545,7 +545,7 @@ test_protein_results.zip
 
 - 同一时间只运行一个推理任务
 - 其他任务在队列中等待（FIFO 顺序）
-- 前端可以通过轮询或 WebSocket 获取任务状态更新
+- 前端可以通过轮询获取任务状态更新
 - 队列长度无限制，但会在统计接口中展示
 
 ### 5.5 日志与监控需求
@@ -564,6 +564,8 @@ test_protein_results.zip
 当前版本：`v1`
 
 基础路径：`/api/v1`
+
+**服务地址**：`http://<server-ip>:8015`
 
 ### 6.2 接口汇总
 
@@ -612,7 +614,7 @@ test_protein_results.zip
 
 ### 7.1 数据库设计
 
-使用 SQLite 数据库，包含以下表：
+使用 SQLite 数据库，数据库文件位于容器内 `/app/data/alphafold3.db`，通过挂载持久化到宿主机。
 
 #### tasks 表
 
@@ -652,23 +654,26 @@ CREATE INDEX idx_tasks_created_at ON tasks(created_at);
 
 ### 7.2 文件存储结构
 
+**容器内路径**：`/app/storage/tasks/{task_id}/`
+
+**宿主机路径**：`/data2/ntt/lvyizhuo/task06-alphafold3-agent/storage/tasks/{task_id}/`
+
 ```
 storage/
-├── tasks/
-│   └── {task_id}/
-│       ├── input.json                    -- 输入文件
-│       └── output/                       -- AlphaFold 输出目录
-│           ├── {job_name}_model.cif
-│           ├── {job_name}_confidences.json
-│           ├── {job_name}_summary_confidences.json
-│           ├── {job_name}_data.json
-│           ├── {job_name}_ranking_scores.csv
-│           ├── TERMS_OF_USE.md
-│           └── seed-{seed}_sample-{sample}/
-│               ├── {job_name}_seed-{seed}_sample-{sample}_model.cif
-│               ├── {job_name}_seed-{seed}_sample-{sample}_confidences.json
-│               └── {job_name}_seed-{seed}_sample-{sample}_summary_confidences.json
-└── temp/                                 -- 临时文件目录
+└── tasks/
+    └── {task_id}/
+        ├── input.json                    # 用户上传的输入文件
+        └── output/                       # AlphaFold 输出
+            ├── {job_name}_model.cif
+            ├── {job_name}_confidences.json
+            ├── {job_name}_summary_confidences.json
+            ├── {job_name}_data.json
+            ├── {job_name}_ranking_scores.csv
+            ├── TERMS_OF_USE.md
+            └── seed-{seed}_sample-{sample}/
+                ├── {job_name}_seed-{seed}_sample-{sample}_model.cif
+                ├── {job_name}_seed-{seed}_sample-{sample}_confidences.json
+                └── {job_name}_seed-{seed}_sample-{sample}_summary_confidences.json
 ```
 
 ### 7.3 结果解析逻辑
@@ -700,30 +705,37 @@ API 需要解析 AlphaFold 3 的输出文件，提取以下信息用于接口返
 | 日志 | loguru | 结构化日志库 |
 | 数据库 | SQLite | 轻量级关系数据库 |
 | 任务队列 | asyncio.Queue | 简单的异步队列 |
-| 文件存储 | 本地文件系统 | 单机部署 |
-| 容器化 | Docker | AlphaFold 运行环境 |
+| 文件存储 | 本地文件系统 | 宿主机挂载目录 |
+| 容器化 | Docker | 部署和运行环境 |
 | 序列化 | Pydantic | 数据验证和序列化 |
 
 ### 8.2 架构图
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        FastAPI Application                       │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐ │
-│  │  API Router  │  │  Middleware  │  │  Task Worker (单线程)   │ │
-│  └─────────────┘  └─────────────┘  └─────────────────────────┘ │
+│                    Docker 容器 (端口 8015)                        │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │                    FastAPI Application                    │   │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐ │   │
+│  │  │  API Router  │  │  Middleware  │  │  Task Worker    │ │   │
+│  │  └─────────────┘  └─────────────┘  │  (单线程阻塞)    │ │   │
+│  │                                     └─────────────────┘ │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│         │                    │                      │           │
+│         ▼                    ▼                      ▼           │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐ │
+│  │   SQLite     │    │   loguru     │    │  run_alphafold.py │ │
+│  │   Database   │    │   Logger     │    │  (模型推理)       │ │
+│  └──────────────┘    └──────────────┘    └──────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
         │                    │                      │
         ▼                    ▼                      ▼
 ┌──────────────┐    ┌──────────────┐    ┌──────────────────────┐
-│   SQLite     │    │   loguru     │    │   Docker Container   │
-│   Database   │    │   Logger     │    │   (AlphaFold 3)      │
+│  宿主机      │    │  宿主机      │    │  宿主机              │
+│  data/       │    │  logs/       │    │  alphafold3/         │
+│  (数据库)    │    │  (日志)      │    │  (模型+数据库)       │
 └──────────────┘    └──────────────┘    └──────────────────────┘
-                                                │
-                                                ▼
-                                        ┌──────────────┐
-                                        │  File Storage │
-                                        └──────────────┘
 ```
 
 ### 8.3 核心流程
@@ -733,7 +745,7 @@ API 需要解析 AlphaFold 3 的输出文件，提取以下信息用于接口返
 ```
 1. 用户上传 JSON 文件
 2. 验证 JSON 格式
-3. 保存输入文件到 storage/tasks/{task_id}/input.json
+3. 保存输入文件到 /app/storage/tasks/{task_id}/input.json
 4. 创建数据库记录（status=pending）
 5. 将 task_id 加入 asyncio.Queue
 6. 返回 task_id 和队列位置
@@ -744,18 +756,12 @@ API 需要解析 AlphaFold 3 的输出文件，提取以下信息用于接口返
 ```
 1. Worker 从队列取出 task_id
 2. 更新数据库状态为 running
-3. 构建 Docker 命令：
-   docker run --gpus all \
-     -v storage/tasks/{task_id}/input.json:/root/af_input/input.json \
-     -v storage/tasks/{task_id}/output:/root/af_output \
-     -v /path/to/models:/root/models \
-     -v /path/to/databases:/root/public_databases \
-     alphafold3 \
-     python run_alphafold.py \
-       --json_path=/root/af_input/input.json \
-       --model_dir=/root/models \
-       --output_dir=/root/af_output
-4. 执行 Docker 容器，等待完成
+3. 调用 run_alphafold.py：
+   python run_alphafold.py \
+     --json_path=/app/storage/tasks/{task_id}/input.json \
+     --model_dir=/root/models \
+     --output_dir=/app/storage/tasks/{task_id}/output
+4. 等待执行完成
 5. 解析输出结果，提取置信度指标
 6. 更新数据库（status=completed，结果信息）
 7. 继续处理下一个任务
@@ -777,76 +783,154 @@ API 需要解析 AlphaFold 3 的输出文件，提取以下信息用于接口返
 
 ### 9.1 目录结构
 
+**项目目录**：`/data2/ntt/lvyizhuo/task06-alphafold3-agent/`
+
 ```
 /data2/ntt/lvyizhuo/task06-alphafold3-agent/
-├── api/                          # API 服务代码
+├── api/                              # API 服务代码
 │   ├── app/
-│   │   ├── main.py              # FastAPI 入口
-│   │   ├── config.py            # 配置
+│   │   ├── main.py                  # FastAPI 入口
+│   │   ├── config.py                # 配置
 │   │   ├── api/
 │   │   │   └── v1/
-│   │   │       ├── predict.py   # 预测接口
-│   │   │       ├── tasks.py     # 任务接口
-│   │   │       └── results.py   # 结果接口
+│   │   │       ├── predict.py       # 预测接口
+│   │   │       ├── tasks.py         # 任务接口
+│   │   │       └── results.py       # 结果接口
 │   │   ├── core/
-│   │   │   ├── alphafold.py     # AlphaFold 调用
-│   │   │   ├── task_manager.py  # 任务管理
-│   │   │   └── storage.py       # 文件存储
+│   │   │   ├── alphafold.py         # AlphaFold 调用
+│   │   │   ├── task_manager.py      # 任务管理
+│   │   │   └── storage.py           # 文件存储
 │   │   ├── models/
-│   │   │   ├── task.py          # 数据库模型
-│   │   │   └── schemas.py       # Pydantic 模型
+│   │   │   ├── task.py              # 数据库模型
+│   │   │   └── schemas.py           # Pydantic 模型
 │   │   └── utils/
-│   │       └── logger.py        # loguru 配置
+│   │       └── logger.py            # loguru 配置
 │   ├── requirements.txt
 │   └── Dockerfile
-├── storage/                      # 文件存储目录
+├── data/                             # 数据库目录（挂载）
+│   └── alphafold3.db                # SQLite 数据库
+├── storage/                          # 结果文件存储（挂载）
 │   └── tasks/
-├── data/                         # 数据库目录
-│   └── alphafold3.db
-├── logs/                         # 日志目录
+├── logs/                             # 日志目录（挂载）
 │   └── app.log
-├── docker/                       # AlphaFold Docker 相关
+├── docker/                           # AlphaFold Docker 相关
 │   └── Dockerfile
-└── models/                       # AlphaFold 模型权重
+└── docs/                             # 文档
+    └── alphafold3-api-prd.md
 ```
 
-### 9.2 环境变量
+**模型文件目录**：`/data2/ntt/lvyizhuo/alphafold3/`
+
+```
+/data2/ntt/lvyizhuo/alphafold3/
+├── alphafold3/                       # AlphaFold 代码
+├── databases/                        # 搜索数据库
+├── images/                           # Docker 镜像
+└── weights/                          # 模型权重
+```
+
+### 9.2 Docker 部署配置
+
+**基于现有 alphafold3 镜像**，在其中添加 FastAPI 服务。
+
+#### Dockerfile
+
+```dockerfile
+FROM alphafold3:latest
+
+# 安装 FastAPI 依赖
+COPY api/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# 复制 API 代码
+COPY api/ /app/api/
+
+# 设置工作目录
+WORKDIR /app
+
+# 暴露端口
+EXPOSE 8015
+
+# 启动命令
+CMD ["uvicorn", "api.app.main:app", "--host", "0.0.0.0", "--port", "8015"]
+```
+
+#### docker-compose.yml
+
+```yaml
+version: '3.8'
+
+services:
+  alphafold3-api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: alphafold3-api
+    ports:
+      - "8015:8015"
+    volumes:
+      # 数据库和存储
+      - ./data:/app/data
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+      # AlphaFold 模型文件
+      - /data2/ntt/lvyizhuo/alphafold3/weights:/root/models
+      - /data2/ntt/lvyizhuo/alphafold3/databases:/root/public_databases
+    environment:
+      - DATABASE_PATH=/app/data/alphafold3.db
+      - STORAGE_PATH=/app/storage
+      - LOG_LEVEL=INFO
+      - LOG_FILE=/app/logs/app.log
+      - MODEL_DIR=/root/models
+      - DB_DIR=/root/public_databases
+      - TASK_TIMEOUT=7200
+      - DATA_RETENTION_DAYS=30
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+```
+
+### 9.3 环境变量
 
 | 变量名 | 说明 | 默认值 |
 |--------|------|--------|
-| DATABASE_PATH | SQLite 数据库路径 | ./data/alphafold3.db |
-| STORAGE_PATH | 文件存储路径 | ./storage |
-| ALPHAFOLD_IMAGE | AlphaFold Docker 镜像名 | alphafold3:latest |
-| MODEL_DIR | 模型参数目录 | /path/to/models |
-| DB_DIR | 数据库目录 | /path/to/databases |
+| DATABASE_PATH | SQLite 数据库路径 | /app/data/alphafold3.db |
+| STORAGE_PATH | 文件存储路径 | /app/storage |
 | LOG_LEVEL | 日志级别 | INFO |
-| LOG_FILE | 日志文件路径 | ./logs/app.log |
+| LOG_FILE | 日志文件路径 | /app/logs/app.log |
+| MODEL_DIR | 模型参数目录 | /root/models |
+| DB_DIR | 数据库目录 | /root/public_databases |
 | TASK_TIMEOUT | 任务超时时间（秒） | 7200 |
 | DATA_RETENTION_DAYS | 数据保留天数 | 30 |
-| API_HOST | API 监听地址 | 0.0.0.0 |
-| API_PORT | API 监听端口 | 8000 |
 
-### 9.3 启动命令
+### 9.4 启动命令
 
 ```bash
-# 安装依赖
-pip install -r requirements.txt
+# 构建镜像
+docker-compose build
 
 # 启动服务
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+docker-compose up -d
 
-# 或使用 Docker
-docker run -d \
-  --name alphafold3-api \
-  -p 8000:8000 \
-  -v /data2/storage:/app/storage \
-  -v /data2/data:/app/data \
-  -v /data2/logs:/app/logs \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v /path/to/models:/root/models \
-  -v /path/to/databases:/root/public_databases \
-  alphafold3-api:latest
+# 查看日志
+docker-compose logs -f
+
+# 停止服务
+docker-compose down
 ```
+
+### 9.5 端口说明
+
+| 服务 | 端口 | 说明 |
+|------|------|------|
+| API 服务 | 8015 | FastAPI 接口服务 |
+| SQLite | - | 无需端口，文件数据库 |
 
 ---
 
@@ -887,6 +971,29 @@ docker run -d \
 | 下载文件 | 下载 CIF 文件 | 返回文件内容 |
 | 下载 ZIP | 下载完整结果包 | 返回 ZIP 文件 |
 
+### 10.3 测试命令
+
+```bash
+# 提交任务
+curl -X POST http://localhost:8015/api/v1/predict \
+  -F "file=@test_input.json"
+
+# 查询任务状态
+curl http://localhost:8015/api/v1/tasks/{task_id}
+
+# 获取任务列表
+curl http://localhost:8015/api/v1/tasks
+
+# 获取结果
+curl http://localhost:8015/api/v1/tasks/{task_id}/results
+
+# 下载文件
+curl -O http://localhost:8015/api/v1/tasks/{task_id}/files/model.cif
+
+# 健康检查
+curl http://localhost:8015/api/v1/health
+```
+
 ---
 
 ## 11. 项目计划
@@ -903,14 +1010,15 @@ docker run -d \
 ### 11.2 详细任务分解
 
 #### 第 1 周：基础框架
-- [ ] 初始化项目结构
+- [ ] 初始化项目结构（api/ 目录）
 - [ ] 配置 FastAPI 应用
 - [ ] 集成 loguru 日志
 - [ ] 设计并创建 SQLite 数据库
 - [ ] 实现基础中间件（CORS、异常处理）
+- [ ] 编写 Dockerfile
 
 #### 第 2 周：核心功能
-- [ ] 实现 AlphaFold Docker 调用封装
+- [ ] 实现 AlphaFold 调用封装（run_alphafold.py）
 - [ ] 实现任务管理器（FIFO 队列）
 - [ ] 实现文件存储管理器
 - [ ] 实现异步任务 Worker
@@ -926,7 +1034,7 @@ docker run -d \
 #### 第 4 周：测试部署
 - [ ] 编写单元测试
 - [ ] 编写集成测试
-- [ ] 编写 Dockerfile
+- [ ] 编写 docker-compose.yml
 - [ ] 编写部署文档
 - [ ] 部署测试环境
 
@@ -940,6 +1048,7 @@ docker run -d \
 | 存储空间不足 | 无法保存结果 | 中 | 自动清理 30 天前数据 |
 | 模型推理失败 | 任务失败 | 中 | 记录错误信息，支持重试 |
 | Docker 容器异常 | 服务中断 | 低 | 设置超时，异常捕获 |
+| GPU 内存不足 | 推理失败 | 中 | 限制序列长度，优化配置 |
 
 ---
 
@@ -948,8 +1057,8 @@ docker run -d \
 ### 13.1 参考文档
 
 - [AlphaFold 3 官方文档](https://github.com/google-deepmind/alphafold3)
-- [AlphaFold 3 输入格式](docs/input.md)
-- [AlphaFold 3 输出格式](docs/output.md)
+- [AlphaFold 3 输入格式](input.md)
+- [AlphaFold 3 输出格式](output.md)
 - [FastAPI 官方文档](https://fastapi.tiangolo.com/)
 - [loguru 官方文档](https://loguru.readthedocs.io/)
 
@@ -972,6 +1081,7 @@ docker run -d \
 |------|------|------|----------|
 | v1.0 | 2026-06-25 | lvyizhuo | 初始版本 |
 | v2.0 | 2026-06-25 | lvyizhuo | 简化设计：单文件上传、FIFO 队列、30 天数据清理、无认证 |
+| v3.0 | 2026-06-25 | lvyizhuo | 明确部署方案：端口 8015、SQLite 外部、Docker 容器部署、目录结构 |
 
 ---
 

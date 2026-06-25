@@ -81,6 +81,8 @@ WORKDIR /app/alphafold
 # If using this as a recipe for local installation, we recommend removing the
 # --frozen and --no-editable flags.
 ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+# Disable BUILD_TESTING to prevent libcifpp from downloading Catch2 from GitHub.
+ENV CMAKE_ARGS="-DBUILD_TESTING=OFF"
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     UV_LINK_MODE=copy uv sync --all-groups --no-editable \

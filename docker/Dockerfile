@@ -82,7 +82,8 @@ WORKDIR /app/alphafold
 # --frozen and --no-editable flags.
 ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 RUN --mount=type=cache,target=/root/.cache/uv \
-    UV_LINK_MODE=copy uv sync --frozen --all-groups --no-editable
+    UV_LINK_MODE=copy uv sync --all-groups --no-editable \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple
 
 # Build chemical components database (this binary was installed by uv sync).
 RUN uv run build_data

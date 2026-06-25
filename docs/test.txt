@@ -1,0 +1,21 @@
+1、构建推理镜像
+
+2、项目结构（服务器）
+2.1 模型权重/数据库（只读）：/data2/ntt/lvyizhuo/alphafold3
+2.2 推理服务代码：/data2/ntt/lvyizhuo/task06-alphafold3-agent
+
+3、alphafold3官方测试命令（单次任务）
+docker run --gpus '"device=0"' \
+    -v /data2/ntt/lvyizhuo/alphafold3/weights:/root/models \
+    -v /data2/ntt/lvyizhuo/alphafold3/databases:/root/public_databases \
+    -v /data2/ntt/lvyizhuo/task06-alphafold3-agent/input:/root/input \
+    -v /data2/ntt/lvyizhuo/task06-alphafold3-agent/output:/root/output \
+    alphafold3 \
+    uv run python3 run_alphafold.py \
+        --json_path=/root/input/test.json \
+        --model_dir=/root/models \
+        --output_dir=/root/output
+
+4、推理服务接口
+端口：8015
+
